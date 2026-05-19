@@ -669,12 +669,12 @@ def safe_name(value: str) -> str:
     return re.sub(r"[^0-9A-Za-z가-힣_.-]+", "_", clean_text(value)).strip("_") or "file"
 
 
-def save_uploaded_file(uploaded_file: Any, category: str, management_no: str) -> str:
+def save_uploaded_file(uploaded_file: Any, category: str, management_no: str, file_name: str | None = None) -> str:
     if uploaded_file is None:
         return ""
     target_dir = UPLOAD_DIR / category / safe_name(management_no)
     target_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{safe_name(uploaded_file.name)}"
+    filename = safe_name(file_name) if file_name else f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{safe_name(uploaded_file.name)}"
     path = target_dir / filename
     with open(path, "wb") as file:
         file.write(uploaded_file.getbuffer())
