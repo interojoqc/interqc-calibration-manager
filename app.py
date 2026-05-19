@@ -111,20 +111,23 @@ if role == "QC":
 else:
     st.session_state["qc_ok"] = False
 
+qc_pages = [
+    "대시보드",
+    "계측기 대장",
+    "신규 등록",
+    "계측기 수정",
+    "검교정/보정 입력",
+    "알림 문구",
+    "폐기 계측기 관리",
+    "담당자 관리",
+    "클라우드 설정",
+    "데이터 가져오기",
+]
+user_pages = ["대시보드", "계측기 대장", "폐기 계측기 관리"]
+available_pages = qc_pages if role == "QC" else user_pages
 page = st.sidebar.radio(
     "메뉴",
-    [
-        "대시보드",
-        "계측기 대장",
-        "신규 등록",
-        "계측기 수정",
-        "검교정/보정 입력",
-        "알림 문구",
-        "폐기 계측기 관리",
-        "담당자 관리",
-        "클라우드 설정",
-        "데이터 가져오기",
-    ],
+    available_pages,
 )
 
 st.title("계측기 검교정 관리 시스템")
@@ -178,23 +181,59 @@ if page == "대시보드":
 elif page == "계측기 대장":
     df = instruments_df(include_disposed=True)
     st.caption("보정값(더하기)은 측정값에 더하는 값이고, 보정계수(곱하기)는 더한 뒤 곱하는 계수입니다. 보정 적용값 = (측정값 + 보정값) x 보정계수")
-    status_filter = st.multiselect("상태", ["사용", "폐기"], default=["사용"])
+    c1, c2, c3 = st.columns(3)
+    status_filter = c1.multiselect("상태", ["사용", "폐기"], default=["사용"], help="기본값은 사용 계측기만 표시합니다. 폐기까지 보려면 폐기를 추가하세요.")
+    cal_filter = c2.multiselect("최근 검교정 구분", ["내부", "외부", "미등록"], default=[])
+    due_filter = c3.selectbox("차기 교정일", ["전체", "기한 초과", "30일 내", "90일 내", "미등록"])
+    c4, c5, c6 = st.columns(3)
     dept_options = sorted([x for x in df.get("department", pd.Series(dtype=str)).dropna().unique()])
-    dept_filter = st.multiselect("사용부서", dept_options)
+    process_options = sorted([x for x in df.get("process", pd.Series(dtype=str)).dropna().unique()])
+    location_options = sorted([x for x in df.get("location", pd.Series(dtype=str)).dropna().unique()])
+    dept_filter = c4.multiselect("담당부서", dept_options)
+    process_filter = c5.multiselect("공정", process_options)
+    location_filter = c6.multiselect("위치", location_options)
+    search = st.text_input("검색", placeholder="관리번호, 계측기명, 일련번호, 담당자")
     filtered = df[df["status"].isin(status_filter)] if not df.empty else df
     if dept_filter:
         filtered = filtered[filtered["department"].isin(dept_filter)]
+    if process_filter:
+        filtered = filtered[filtered["process"].isin(process_filter)]
+    if location_filter:
+        filtered = filtered[filtered["location"].isin(location_filter)]
+    if cal_filter:
+        cal_mask = pd.Series(False, index=filtered.index)
+        if "미등록" in cal_filter:
+            cal_mask |= filtered["last_calibration_type"].isna() | (filtered["last_calibration_type"].fillna("") == "")
+        selected_cal = [x for x in cal_filter if x != "미등록"]
+        if selected_cal:
+            cal_mask |= filtered["last_calibration_type"].isin(selected_cal)
+        filtered = filtered[cal_mask]
+    if due_filter != "전체":
+        due_dates = pd.to_datetime(filtered["next_due_date"], errors="coerce")
+        today = pd.Timestamp(date.today())
+        if due_filter == "기한 초과":
+            filtered = filtered[due_dates < today]
+        elif due_filter == "30일 내":
+            filtered = filtered[(due_dates >= today) & (due_dates <= today + pd.Timedelta(days=30))]
+        elif due_filter == "90일 내":
+            filtered = filtered[(due_dates >= today) & (due_dates <= today + pd.Timedelta(days=90))]
+        elif due_filter == "미등록":
+            filtered = filtered[due_dates.isna()]
+    if search:
+        terms = filtered[["management_no", "name", "serial_no", "department_owner", "department_owner2"]].fillna("").agg(" ".join, axis=1)
+        filtered = filtered[terms.str.contains(search, case=False, na=False)]
+    st.caption(f"조회 결과: {len(filtered):,}건")
 
     cols = [
         "management_no",
         "name",
-        "serial_no",
-        "cycle_text",
         "location",
         "process",
         "department",
         "department_owner",
         "department_owner2",
+        "serial_no",
+        "cycle_text",
         "status",
         "last_calibration_type",
         "last_calibration_date",
@@ -211,13 +250,13 @@ elif page == "계측기 대장":
         columns={
             "management_no": "관리번호",
             "name": "계측기명",
-            "serial_no": "제작 일련번호",
-            "cycle_text": "교정주기",
             "location": "위치",
             "process": "공정",
             "department": "담당부서",
             "department_owner": "담당자",
             "department_owner2": "담당자 2",
+            "serial_no": "제작 일련번호",
+            "cycle_text": "교정주기",
             "status": "상태",
             "last_calibration_type": "최근 구분",
             "last_calibration_date": "최근 교정일",
@@ -505,12 +544,15 @@ elif page == "알림 문구":
                 owner = str(contact.iloc[0].get("owner_name") or "")
         message = make_kakao_message(department, rows, owner)
         st.dataframe(
-            rows[["department", "management_no", "name", "location", "last_calibration_type", "next_due_date", "남은일수"]].rename(
+            rows[["department", "management_no", "name", "location", "process", "department_owner", "department_owner2", "last_calibration_type", "next_due_date", "남은일수"]].rename(
                 columns={
                     "department": "사용부서",
                     "management_no": "관리번호",
                     "name": "계측기명",
                     "location": "위치",
+                    "process": "공정",
+                    "department_owner": "담당자",
+                    "department_owner2": "담당자 2",
                     "last_calibration_type": "구분",
                     "next_due_date": "차기 교정일",
                 }
@@ -518,14 +560,32 @@ elif page == "알림 문구":
             use_container_width=True,
             hide_index=True,
         )
-        st.text_area("복사해서 보낼 문구", value=message, height=300)
+        st.caption(f"문구 포함 건수: {len(rows):,}건")
+        st.text_area("복사해서 보낼 문구", value=message, height=420)
 
 elif page == "폐기 계측기 관리":
     st.subheader("폐기 계측기 관리")
     df = instruments_df(include_disposed=True)
     disposed = df[df["status"] == "폐기"] if not df.empty else df
+    if not disposed.empty:
+        c1, c2, c3 = st.columns(3)
+        report_filter = c1.selectbox("폐기보고서 등록 여부", ["전체", "등록", "미등록"])
+        dept_options = sorted([x for x in disposed.get("department", pd.Series(dtype=str)).dropna().unique()])
+        dept_filter = c2.multiselect("담당부서", dept_options)
+        search = c3.text_input("폐기 계측기 검색", placeholder="관리번호, 계측기명, 일련번호")
+        if report_filter == "등록":
+            disposed = disposed[disposed["disposal_report_file_path"].fillna("") != ""]
+        elif report_filter == "미등록":
+            disposed = disposed[disposed["disposal_report_file_path"].fillna("") == ""]
+        if dept_filter:
+            disposed = disposed[disposed["department"].isin(dept_filter)]
+        if search:
+            terms = disposed[["management_no", "name", "serial_no"]].fillna("").agg(" ".join, axis=1)
+            disposed = disposed[terms.str.contains(search, case=False, na=False)]
+        missing_reports = disposed[disposed["disposal_report_file_path"].fillna("") == ""]
+        st.caption(f"조회 결과: {len(disposed):,}건 / 폐기보고서 미등록: {len(missing_reports):,}건")
     if disposed.empty:
-        st.info("폐기 계측기가 없습니다.")
+        st.info("조건에 맞는 폐기 계측기가 없습니다.")
     else:
         show = disposed[
             [
@@ -533,7 +593,10 @@ elif page == "폐기 계측기 관리":
                 "name",
                 "serial_no",
                 "location",
+                "process",
                 "department",
+                "department_owner",
+                "department_owner2",
                 "disposal_report_no",
                 "disposal_report_file_path",
                 "remark",
@@ -544,7 +607,10 @@ elif page == "폐기 계측기 관리":
                 "name": "계측기명",
                 "serial_no": "일련번호",
                 "location": "위치",
-                "department": "사용부서",
+                "process": "공정",
+                "department": "담당부서",
+                "department_owner": "담당자",
+                "department_owner2": "담당자 2",
                 "disposal_report_no": "폐기 보고서 번호",
                 "disposal_report_file_path": "폐기 보고서 등록여부",
                 "remark": "비고",
@@ -552,6 +618,22 @@ elif page == "폐기 계측기 관리":
         )
         show["폐기 보고서 등록여부"] = show["폐기 보고서 등록여부"].apply(lambda x: "등록" if x else "미등록")
         st.dataframe(show, use_container_width=True, hide_index=True)
+        if not missing_reports.empty:
+            with st.expander("폐기보고서 미등록 리스트"):
+                st.dataframe(
+                    missing_reports[["management_no", "name", "location", "process", "department", "remark"]].rename(
+                        columns={
+                            "management_no": "관리번호",
+                            "name": "계측기명",
+                            "location": "위치",
+                            "process": "공정",
+                            "department": "담당부서",
+                            "remark": "비고",
+                        }
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
         for row in disposed.itertuples():
             if getattr(row, "disposal_report_file_path", ""):
                 file_download_button(f"{row.management_no} 폐기보고서 다운로드", row.disposal_report_file_path, f"disposal_{row.id}")
