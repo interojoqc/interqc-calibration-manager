@@ -123,6 +123,22 @@ def upload_file_to_drive(file_name: str, content: bytes, mime_type: str = "appli
     return created.get("webViewLink") or f"https://drive.google.com/file/d/{created['id']}/view"
 
 
+def drive_file_exists(file_name: str) -> bool:
+    folder_id = get_secret("GOOGLE_DRIVE_FOLDER_ID")
+    if not folder_id:
+        return False
+    escaped_name = file_name.replace("\\", "\\\\").replace("'", "\\'")
+    escaped_folder = folder_id.replace("\\", "\\\\").replace("'", "\\'")
+    query = f"name = '{escaped_name}' and '{escaped_folder}' in parents and trashed = false"
+    result = (
+        drive_service()
+        .files()
+        .list(q=query, fields="files(id)", pageSize=1, supportsAllDrives=True, includeItemsFromAllDrives=True)
+        .execute()
+    )
+    return bool(result.get("files"))
+
+
 def replace_sheet_with_dataframe(sheet_name: str, df: pd.DataFrame) -> None:
     spreadsheet_id = get_secret("GOOGLE_SHEET_ID")
     if not spreadsheet_id:
