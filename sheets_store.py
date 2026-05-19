@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -468,6 +469,8 @@ def upsert_contact(department: str, owner_name: str, kakao_target: str, phone: s
 
 
 def dashboard_metrics() -> dict[str, int]:
+    import pandas as pd
+
     df = instruments_df(include_disposed=True)
     if df.empty:
         return {"total": 0, "active": 0, "disposed": 0, "overdue": 0, "due_90": 0}
@@ -484,6 +487,8 @@ def dashboard_metrics() -> dict[str, int]:
 
 
 def due_items(days: int = 90, include_overdue: bool = True, calibration_filter: str = "전체") -> pd.DataFrame:
+    import pandas as pd
+
     df = instruments_df(include_disposed=False)
     if df.empty:
         return df
