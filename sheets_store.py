@@ -621,8 +621,12 @@ def import_excel(path: str | Path, reset: bool = False) -> ImportSummary:
     ts = now_text()
     source = Path(path)
 
-    instruments = pd.DataFrame(columns=INSTRUMENT_COLUMNS) if reset else instruments_raw_df()
-    records = pd.DataFrame(columns=RECORD_COLUMNS) if reset else records_raw_df()
+    instruments = (
+        pd.DataFrame(columns=INSTRUMENT_COLUMNS) if reset else instruments_raw_df()
+    ).astype("object")
+    records = (
+        pd.DataFrame(columns=RECORD_COLUMNS) if reset else records_raw_df()
+    ).astype("object")
     if reset:
         write_values("department_contacts", [CONTACT_COLUMNS])
 
