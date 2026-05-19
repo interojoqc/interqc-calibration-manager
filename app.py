@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+data/*.db
+outputs/*.xlsx
+uploads/
+*.log
+*.key.json
+*.credentials.json
+.streamlit/secrets.toml
