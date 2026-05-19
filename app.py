@@ -639,18 +639,21 @@ GOOGLE_SERVICE_ACCOUNT_JSON={...서비스 계정 JSON 전체...}""",
 elif page == "데이터 가져오기":
     st.subheader("기존 엑셀 대장 가져오기")
     st.caption(f"기본 경로: {DEFAULT_EXCEL_PATH}")
+    st.info("반복 업로드해도 같은 계측기/구분/교정일/차기교정일/비고의 이력은 중복 추가하지 않고 기존 이력을 보완합니다. 전체 초기화가 필요할 때만 아래 체크박스를 사용하세요.")
     st.dataframe(get_import_log(), use_container_width=True, hide_index=True)
     if require_qc():
-        reset = st.checkbox("기존 앱 DB를 비우고 다시 가져오기")
+        reset = st.checkbox("기존 앱 DB를 비우고 다시 가져오기", help="초기 데이터 전체를 새 엑셀 기준으로 갈아엎을 때만 사용하세요.")
         uploaded = st.file_uploader("엑셀 파일 업로드", type=["xlsx"])
-        if uploaded and st.button("업로드 파일 가져오기"):
+        if uploaded and st.button("업로드 파일 가져오기", type="primary"):
             temp_path = Path(__file__).parent / "data" / uploaded.name
             temp_path.write_bytes(uploaded.getbuffer())
-            summary = import_excel(temp_path, reset=reset)
-            st.success(f"{summary.instrument_count}개 계측기, {summary.record_count}개 이력을 가져왔습니다.")
+            with st.spinner("엑셀 데이터를 가져오는 중입니다. 완료 메시지가 뜰 때까지 다시 누르지 마세요."):
+                summary = import_excel(temp_path, reset=reset)
+            st.success(f"{summary.instrument_count}개 계측기, {summary.record_count}개 이력을 처리했습니다. 기존 동일 이력은 중복 없이 보완됩니다.")
         if st.button("기본 경로 파일 가져오기"):
             if DEFAULT_EXCEL_PATH.exists():
-                summary = import_excel(DEFAULT_EXCEL_PATH, reset=reset)
-                st.success(f"{summary.instrument_count}개 계측기, {summary.record_count}개 이력을 가져왔습니다.")
+                with st.spinner("기본 경로 엑셀 데이터를 가져오는 중입니다."):
+                    summary = import_excel(DEFAULT_EXCEL_PATH, reset=reset)
+                st.success(f"{summary.instrument_count}개 계측기, {summary.record_count}개 이력을 처리했습니다. 기존 동일 이력은 중복 없이 보완됩니다.")
             else:
                 st.error("기본 경로에서 파일을 찾을 수 없습니다. 파일 업로드를 사용하세요.")
