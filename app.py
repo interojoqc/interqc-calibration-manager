@@ -37,6 +37,7 @@ from backend import (
     parse_cycle_months,
     save_uploaded_file,
     update_correction,
+    update_instrument_master,
     upsert_contact,
     upsert_instrument,
 )
@@ -116,6 +117,7 @@ page = st.sidebar.radio(
         "대시보드",
         "계측기 대장",
         "신규 등록",
+        "계측기 수정",
         "검교정/보정 입력",
         "알림 문구",
         "폐기 계측기 관리",
@@ -189,8 +191,10 @@ elif page == "계측기 대장":
         "serial_no",
         "cycle_text",
         "location",
+        "process",
         "department",
         "department_owner",
+        "department_owner2",
         "status",
         "last_calibration_type",
         "last_calibration_date",
@@ -209,9 +213,11 @@ elif page == "계측기 대장":
             "name": "계측기명",
             "serial_no": "제작 일련번호",
             "cycle_text": "교정주기",
-            "location": "설치 위치",
-            "department": "사용부서",
-            "department_owner": "부서 담당자",
+            "location": "위치",
+            "process": "공정",
+            "department": "담당부서",
+            "department_owner": "담당자",
+            "department_owner2": "담당자 2",
             "status": "상태",
             "last_calibration_type": "최근 구분",
             "last_calibration_date": "최근 교정일",
@@ -293,11 +299,14 @@ elif page == "신규 등록":
         c4, c5, c6 = st.columns(3)
         cycle_text = c4.selectbox("교정주기", ["12개월", "내부 6개월", "24개월", "내부 12개월", "6개월", "기타"], disabled=disabled)
         custom_cycle = c5.text_input("기타 주기", disabled=disabled)
-        location = c6.text_input("설치 위치", disabled=disabled)
+        location = c6.text_input("위치", disabled=disabled)
         c7, c8, c9 = st.columns(3)
-        department = c7.text_input("사용부서", disabled=disabled)
-        department_owner = c8.text_input("사용부서 담당자", disabled=disabled)
-        qc_owner = c9.text_input("QC 담당자", disabled=disabled)
+        process = c7.text_input("공정", disabled=disabled)
+        department = c8.text_input("담당부서", disabled=disabled)
+        department_owner = c9.text_input("담당자", disabled=disabled)
+        c10, c11 = st.columns(2)
+        department_owner2 = c10.text_input("담당자 2", disabled=disabled)
+        qc_owner = c11.text_input("QC 담당자", disabled=disabled)
         remark = st.text_area("비고", disabled=disabled)
         is_standard = st.checkbox("표준품", disabled=disabled)
         submitted = st.form_submit_button("등록", disabled=disabled)
@@ -314,8 +323,10 @@ elif page == "신규 등록":
                     "cycle_text": final_cycle,
                     "cycle_months": parse_cycle_months(final_cycle),
                     "location": location,
+                    "process": process,
                     "department": department,
                     "department_owner": department_owner,
+                    "department_owner2": department_owner2,
                     "qc_owner": qc_owner,
                     "is_standard": is_standard,
                     "status": "사용",
@@ -323,6 +334,52 @@ elif page == "신규 등록":
                 }
             )
             st.success("신규 계측기를 등록했습니다.")
+
+elif page == "계측기 수정":
+    st.subheader("계측기별 기본정보 수정")
+    df = instruments_df(include_disposed=True)
+    instrument = selected_instrument(df, "수정할 계측기 선택")
+    disabled = not is_qc()
+    if instrument:
+        with st.form("edit_instrument"):
+            c1, c2, c3 = st.columns(3)
+            c1.text_input("관리번호", value=instrument.get("management_no", ""), disabled=True)
+            name = c2.text_input("계측기명", value=instrument.get("name", ""), disabled=disabled)
+            serial_no = c3.text_input("제작 일련번호", value=instrument.get("serial_no", ""), disabled=disabled)
+            c4, c5, c6 = st.columns(3)
+            cycle_text = c4.text_input("교정주기", value=instrument.get("cycle_text", ""), disabled=disabled)
+            location = c5.text_input("위치", value=instrument.get("location", ""), disabled=disabled)
+            process = c6.text_input("공정", value=instrument.get("process", ""), disabled=disabled)
+            c7, c8, c9 = st.columns(3)
+            department = c7.text_input("담당부서", value=instrument.get("department", ""), disabled=disabled)
+            department_owner = c8.text_input("담당자", value=instrument.get("department_owner", ""), disabled=disabled)
+            department_owner2 = c9.text_input("담당자 2", value=instrument.get("department_owner2", ""), disabled=disabled)
+            c10, c11, c12 = st.columns(3)
+            qc_owner = c10.text_input("QC 담당자", value=instrument.get("qc_owner", ""), disabled=disabled)
+            status = c11.selectbox("상태", ["사용", "폐기"], index=1 if instrument.get("status") == "폐기" else 0, disabled=disabled)
+            is_standard = c12.checkbox("표준품", value=bool(int(instrument.get("is_standard") or 0)), disabled=disabled)
+            remark = st.text_area("비고", value=instrument.get("remark", ""), disabled=disabled)
+            submitted = st.form_submit_button("수정 저장", disabled=disabled)
+        if submitted and require_qc():
+            update_instrument_master(
+                int(instrument["id"]),
+                {
+                    "name": name,
+                    "serial_no": serial_no,
+                    "cycle_text": cycle_text,
+                    "cycle_months": parse_cycle_months(cycle_text),
+                    "location": location,
+                    "process": process,
+                    "department": department,
+                    "department_owner": department_owner,
+                    "department_owner2": department_owner2,
+                    "qc_owner": qc_owner,
+                    "status": status,
+                    "is_standard": is_standard,
+                    "remark": remark,
+                },
+            )
+            st.success("계측기 기본정보를 수정했습니다.")
 
 elif page == "검교정/보정 입력":
     st.subheader("검교정 이력, 성적서, 보정값 입력")
