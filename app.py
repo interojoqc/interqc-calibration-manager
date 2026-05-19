@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from datetime import date
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import streamlit as st
 
 from cloud_integrations import (
     cloud_status,
+    drive_file_exists,
     extract_text_with_vision,
     parse_certificate_candidates,
     replace_sheet_with_dataframe,
@@ -86,16 +88,57 @@ def selected_instrument(df: pd.DataFrame, label: str = "계측기 선택") -> di
     return get_instrument(options[selected])
 
 
-def save_certificate_file(uploaded_file, management_no: str, category: str) -> str:
+def document_date_text(value: date | str | None) -> str:
+    if isinstance(value, date):
+        return value.strftime("%Y%m%d")
+    text = str(value or "").strip()
+    digits = re.sub(r"\D", "", text)
+    if len(digits) >= 8:
+        return digits[:8]
+    return date.today().strftime("%Y%m%d")
+
+
+def safe_document_component(value: str) -> str:
+    return re.sub(r"[^0-9A-Za-z가-힣_.-]+", "_", str(value or "").strip()).strip("_") or "file"
+
+
+def build_document_filename(uploaded_file, management_no: str, document_date: date | str | None, category: str) -> str:
+    suffix = Path(uploaded_file.name).suffix.lower() or ".bin"
+    stem = f"{safe_document_component(management_no)}_{document_date_text(document_date)}"
+    if category == "disposal_reports":
+        stem = f"{stem}_폐기"
+    return f"{stem}_v01{suffix}"
+
+
+def next_document_filename(uploaded_file, management_no: str, document_date: date | str | None, category: str, use_drive: bool) -> str:
+    first = build_document_filename(uploaded_file, management_no, document_date, category)
+    suffix = Path(first).suffix
+    base = first[: -len(suffix)] if suffix else first
+    base = re.sub(r"_v\d{2}$", "", base)
+    for version in range(1, 100):
+        candidate = f"{base}_v{version:02d}{suffix}"
+        if use_drive:
+            if not drive_file_exists(candidate):
+                return candidate
+        else:
+            local_path = Path(__file__).parent / "uploads" / category / safe_document_component(management_no) / candidate
+            if not local_path.exists():
+                return candidate
+    return f"{base}_v99{suffix}"
+
+
+def save_certificate_file(uploaded_file, management_no: str, category: str, document_date: date | str | None = None) -> str:
     if uploaded_file is None:
         return ""
     status = cloud_status()
     if status.google_libs and status.credentials and status.drive_folder_id:
         try:
-            return upload_file_to_drive(uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type or "application/octet-stream")
+            file_name = next_document_filename(uploaded_file, management_no, document_date, category, use_drive=True)
+            return upload_file_to_drive(file_name, uploaded_file.getvalue(), uploaded_file.type or "application/octet-stream")
         except Exception as exc:
             st.warning(f"Google Drive 업로드 실패로 로컬에 저장합니다: {exc}")
-    return save_uploaded_file(uploaded_file, category, management_no)
+    file_name = next_document_filename(uploaded_file, management_no, document_date, category, use_drive=False)
+    return save_uploaded_file(uploaded_file, category, management_no, file_name=file_name)
 
 
 st.sidebar.title("계측기 관리")
@@ -530,6 +573,7 @@ elif page == "검교정/보정 입력":
 
         st.markdown("**검교정 완료 입력**")
         uploaded = st.file_uploader("성적서 스캔본/PDF 업로드", type=["pdf", "png", "jpg", "jpeg", "xlsx"], disabled=disabled)
+        st.caption("원본 파일명은 그대로 올려도 됩니다. 저장 시 관리번호_교정일자_v01 형식으로 자동 정리됩니다. 예: M-001_20260519_v01.pdf")
         guessed_no = guess_document_no(uploaded)
         ocr_candidates = {}
         if uploaded and status.vision_ready and uploaded.type and uploaded.type.startswith("image/"):
@@ -565,7 +609,7 @@ elif page == "검교정/보정 입력":
             make_internal_cert = st.checkbox("내부교정 성적서 파일 자동 생성", value=False, disabled=disabled)
             submitted = st.form_submit_button("검교정 이력 저장", disabled=disabled)
         if submitted and require_qc():
-            cert_path = save_certificate_file(uploaded, instrument["management_no"], "certificates") if uploaded else ""
+            cert_path = save_certificate_file(uploaded, instrument["management_no"], "certificates", cal_date) if uploaded else ""
             record = {
                 "instrument_id": instrument["id"],
                 "calibration_type": cal_type,
@@ -723,6 +767,7 @@ elif page == "폐기 계측기 관리":
             selected = st.selectbox("폐기 처리할 계측기", list(options.keys()))
             instrument = get_instrument(options[selected])
             report_file = st.file_uploader("폐기 보고서 스캔본/PDF 업로드", type=["pdf", "png", "jpg", "jpeg"], key="disposal_upload")
+            st.caption("원본 파일명은 그대로 올려도 됩니다. 저장 시 관리번호_처리일자_폐기_v01 형식으로 자동 정리됩니다. 예: M-001_20260519_폐기_v01.pdf")
             guessed_report_no = guess_document_no(report_file)
             status = cloud_status()
             if report_file and status.vision_ready and report_file.type and report_file.type.startswith("image/"):
@@ -738,7 +783,7 @@ elif page == "폐기 계측기 관리":
             note = st.text_area("폐기 사유/비고")
             st.caption("Google Vision OCR 설정이 있으면 이미지에서 번호 후보를 읽고, 없으면 파일명에 들어간 번호를 후보로 가져옵니다.")
             if st.button("폐기 처리"):
-                file_path = save_certificate_file(report_file, instrument["management_no"], "disposal_reports") if report_file else ""
+                file_path = save_certificate_file(report_file, instrument["management_no"], "disposal_reports", date.today()) if report_file else ""
                 mark_disposed(options[selected], note or "폐기 처리", report_no, file_path)
                 st.success("폐기 계측기로 분리했습니다.")
 
