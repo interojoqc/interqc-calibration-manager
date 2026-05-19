@@ -124,7 +124,9 @@ qc_pages = [
     "데이터 가져오기",
 ]
 user_pages = ["대시보드", "계측기 대장", "폐기 계측기 관리"]
-available_pages = qc_pages if role == "QC" else user_pages
+available_pages = qc_pages if is_qc() else user_pages
+if role == "QC" and not is_qc():
+    st.sidebar.info("QC 암호를 입력하면 QC 전용 메뉴가 표시됩니다.")
 page = st.sidebar.radio(
     "메뉴",
     available_pages,
