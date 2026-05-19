@@ -349,17 +349,16 @@ def add_calibration_record(data: dict[str, Any]) -> None:
         }
         existing = conn.execute(
             """
-            SELECT id, certificate_no, certificate_file_path, measured_value, corrected_value, correction_snapshot
+            SELECT id, certificate_no, certificate_file_path, measured_value, corrected_value, correction_snapshot, note
             FROM calibration_records
             WHERE instrument_id = ? AND calibration_type = ? AND calibration_date = ?
-              AND next_due_date = ? AND COALESCE(note, '') = ?
+              AND next_due_date = ?
             """,
             (
                 payload["instrument_id"],
                 payload["calibration_type"],
                 payload["calibration_date"],
                 payload["next_due_date"],
-                payload["note"],
             ),
         ).fetchone()
         if existing:
@@ -371,7 +370,8 @@ def add_calibration_record(data: dict[str, Any]) -> None:
                     certificate_file_path = COALESCE(NULLIF(?, ''), certificate_file_path),
                     measured_value = COALESCE(?, measured_value),
                     corrected_value = COALESCE(?, corrected_value),
-                    correction_snapshot = COALESCE(NULLIF(?, ''), correction_snapshot)
+                    correction_snapshot = COALESCE(NULLIF(?, ''), correction_snapshot),
+                    note = COALESCE(NULLIF(note, ''), NULLIF(?, ''), note)
                 WHERE id = ?
                 """,
                 (
@@ -381,6 +381,7 @@ def add_calibration_record(data: dict[str, Any]) -> None:
                     payload["measured_value"],
                     payload["corrected_value"],
                     payload["correction_snapshot"],
+                    payload["note"],
                     existing["id"],
                 ),
             )
