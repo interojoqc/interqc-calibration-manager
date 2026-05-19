@@ -137,6 +137,18 @@ st.caption(f"현재 저장소: {BACKEND_NAME}")
 
 if page == "대시보드":
     metrics = dashboard_metrics()
+    all_df = instruments_df(include_disposed=True)
+    active_df = all_df[all_df["status"] != "폐기"] if not all_df.empty else all_df
+    due_30 = due_items(30)
+    due_90 = due_items(90)
+    overdue = due_90[due_90["남은일수"] < 0] if not due_90.empty else due_90
+    disposed_df = all_df[all_df["status"] == "폐기"] if not all_df.empty else all_df
+    disposal_missing = disposed_df[disposed_df["disposal_report_file_path"].fillna("") == ""] if not disposed_df.empty else disposed_df
+    cert_missing = active_df[
+        (active_df["last_record_id"].fillna("") != "")
+        & (active_df["last_certificate_file_path"].fillna("") == "")
+    ] if not active_df.empty else active_df
+
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("전체 계측기", f"{metrics['total']:,}")
     c2.metric("사용 계측기", f"{metrics['active']:,}")
@@ -144,7 +156,72 @@ if page == "대시보드":
     c4.metric("기한 초과", f"{metrics['overdue']:,}")
     c5.metric("90일 내 도래", f"{metrics['due_90']:,}")
 
-    due = due_items(90)
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("30일 내 도래", f"{len(due_30):,}")
+    s2.metric("폐기보고서 미등록", f"{len(disposal_missing):,}")
+    s3.metric("성적서 파일 미등록", f"{len(cert_missing):,}")
+    s4.metric("검교정 미등록", f"{int(active_df['last_record_id'].isna().sum()) if not active_df.empty else 0:,}")
+
+    st.subheader("우선 조치 리스트")
+    priority_tabs = st.tabs(["기한 초과", "30일 내 도래", "폐기보고서 미등록"])
+    with priority_tabs[0]:
+        if overdue.empty:
+            st.success("기한 초과 계측기가 없습니다.")
+        else:
+            st.dataframe(
+                overdue[["management_no", "name", "department", "location", "process", "next_due_date", "남은일수", "department_owner"]].rename(
+                    columns={
+                        "management_no": "관리번호",
+                        "name": "계측기명",
+                        "department": "담당부서",
+                        "location": "위치",
+                        "process": "공정",
+                        "next_due_date": "차기 교정일",
+                        "department_owner": "담당자",
+                    }
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+    with priority_tabs[1]:
+        if due_30.empty:
+            st.success("30일 내 도래 계측기가 없습니다.")
+        else:
+            st.dataframe(
+                due_30[["management_no", "name", "department", "location", "process", "next_due_date", "남은일수", "department_owner"]].rename(
+                    columns={
+                        "management_no": "관리번호",
+                        "name": "계측기명",
+                        "department": "담당부서",
+                        "location": "위치",
+                        "process": "공정",
+                        "next_due_date": "차기 교정일",
+                        "department_owner": "담당자",
+                    }
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+    with priority_tabs[2]:
+        if disposal_missing.empty:
+            st.success("폐기보고서 미등록 계측기가 없습니다.")
+        else:
+            st.dataframe(
+                disposal_missing[["management_no", "name", "department", "location", "process", "remark"]].rename(
+                    columns={
+                        "management_no": "관리번호",
+                        "name": "계측기명",
+                        "department": "담당부서",
+                        "location": "위치",
+                        "process": "공정",
+                        "remark": "비고",
+                    }
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+    due = due_90
     st.subheader("향후 3개월 검교정 도래")
     if due.empty:
         st.info("도래 대상이 없습니다. 먼저 데이터를 가져오거나 검교정 이력을 입력하세요.")
@@ -184,16 +261,24 @@ elif page == "계측기 대장":
     df = instruments_df(include_disposed=True)
     st.caption("보정값(더하기)은 측정값에 더하는 값이고, 보정계수(곱하기)는 더한 뒤 곱하는 계수입니다. 보정 적용값 = (측정값 + 보정값) x 보정계수")
     c1, c2, c3 = st.columns(3)
-    status_filter = c1.multiselect("상태", ["사용", "폐기"], default=["사용"], help="기본값은 사용 계측기만 표시합니다. 폐기까지 보려면 폐기를 추가하세요.")
-    cal_filter = c2.multiselect("최근 검교정 구분", ["내부", "외부", "미등록"], default=[])
-    due_filter = c3.selectbox("차기 교정일", ["전체", "기한 초과", "30일 내", "90일 내", "미등록"])
-    c4, c5, c6 = st.columns(3)
     dept_options = sorted([x for x in df.get("department", pd.Series(dtype=str)).dropna().unique()])
     process_options = sorted([x for x in df.get("process", pd.Series(dtype=str)).dropna().unique()])
     location_options = sorted([x for x in df.get("location", pd.Series(dtype=str)).dropna().unique()])
-    dept_filter = c4.multiselect("담당부서", dept_options)
-    process_filter = c5.multiselect("공정", process_options)
-    location_filter = c6.multiselect("위치", location_options)
+    if is_qc():
+        status_filter = c1.multiselect("상태", ["사용", "폐기"], default=["사용"], help="기본값은 사용 계측기만 표시합니다. 폐기까지 보려면 폐기를 추가하세요.")
+        cal_filter = c2.multiselect("최근 검교정 구분", ["내부", "외부", "미등록"], default=[])
+        due_filter = c3.selectbox("차기 교정일", ["전체", "기한 초과", "30일 내", "90일 내", "미등록"])
+        c4, c5, c6 = st.columns(3)
+        dept_filter = c4.multiselect("담당부서", dept_options)
+        process_filter = c5.multiselect("공정", process_options)
+        location_filter = c6.multiselect("위치", location_options)
+    else:
+        status_filter = ["사용"]
+        cal_filter = []
+        due_filter = c1.selectbox("차기 교정일", ["전체", "기한 초과", "30일 내", "90일 내"])
+        dept_filter = c2.multiselect("담당부서", dept_options)
+        process_filter = c3.multiselect("공정", process_options)
+        location_filter = []
     search = st.text_input("검색", placeholder="관리번호, 계측기명, 일련번호, 담당자")
     filtered = df[df["status"].isin(status_filter)] if not df.empty else df
     if dept_filter:
@@ -226,28 +311,19 @@ elif page == "계측기 대장":
         filtered = filtered[terms.str.contains(search, case=False, na=False)]
     st.caption(f"조회 결과: {len(filtered):,}건")
 
-    cols = [
-        "management_no",
-        "name",
-        "location",
-        "process",
-        "department",
-        "department_owner",
-        "department_owner2",
-        "serial_no",
-        "cycle_text",
-        "status",
-        "last_calibration_type",
-        "last_calibration_date",
-        "next_due_date",
-        "last_certificate_no",
-        "correction_offset",
-        "correction_factor",
-        "correction_unit",
-        "last_measured_value",
-        "last_corrected_value",
-        "remark",
-    ]
+    if is_qc():
+        cols = [
+            "management_no", "name", "location", "process", "department", "department_owner",
+            "department_owner2", "serial_no", "cycle_text", "status", "last_calibration_type",
+            "last_calibration_date", "next_due_date", "last_certificate_no", "correction_offset",
+            "correction_factor", "correction_unit", "last_measured_value", "last_corrected_value", "remark",
+        ]
+    else:
+        cols = [
+            "management_no", "name", "location", "process", "department", "department_owner",
+            "department_owner2", "cycle_text", "last_calibration_type", "last_calibration_date",
+            "next_due_date", "remark",
+        ]
     show = filtered[[c for c in cols if c in filtered.columns]].rename(
         columns={
             "management_no": "관리번호",
