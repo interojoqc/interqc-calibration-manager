@@ -607,3 +607,214 @@ def import_excel(path: str | Path, reset: bool = False) -> ImportSummary:
     }
     write_table("import_log", pd.concat([log, pd.DataFrame([log_row])], ignore_index=True), IMPORT_LOG_COLUMNS)
     return ImportSummary(instrument_count, record_count, disposed_count, str(source))
+
+
+def import_excel(path: str | Path, reset: bool = False) -> ImportSummary:
+    """Import the Excel workbook with batched Google Sheets writes.
+
+    The row-by-row helpers are fine for manual edits, but imports can contain
+    hundreds of instruments. Reading and writing each row separately can hit
+    Google Sheets API limits, so this importer updates local DataFrames first
+    and writes each target sheet once.
+    """
+    init_db()
+    ts = now_text()
+    source = Path(path)
+
+    instruments = pd.DataFrame(columns=INSTRUMENT_COLUMNS) if reset else instruments_raw_df()
+    records = pd.DataFrame(columns=RECORD_COLUMNS) if reset else records_raw_df()
+    if reset:
+        write_values("department_contacts", [CONTACT_COLUMNS])
+
+    def max_id(df: pd.DataFrame) -> int:
+        if df.empty or "id" not in df:
+            return 0
+        ids = pd.to_numeric(df["id"], errors="coerce").dropna()
+        return int(ids.max()) if not ids.empty else 0
+
+    next_instrument_id = max_id(instruments) + 1
+    next_record_id = max_id(records) + 1
+
+    def upsert_instrument_row(data: dict[str, Any]) -> int:
+        nonlocal instruments, next_instrument_id
+        management_no = clean_text(data["management_no"])
+        cycle_text = clean_text(data.get("cycle_text"))
+        payload = {
+            "management_no": management_no,
+            "name": clean_text(data["name"]),
+            "serial_no": clean_text(data.get("serial_no")),
+            "cycle_text": cycle_text,
+            "cycle_months": data.get("cycle_months") or parse_cycle_months(cycle_text) or "",
+            "location": clean_text(data.get("location")),
+            "process": clean_text(data.get("process")),
+            "department": clean_text(data.get("department")) or derive_department(data.get("location", "")),
+            "department_owner": clean_text(data.get("department_owner")),
+            "department_owner2": clean_text(data.get("department_owner2")),
+            "qc_owner": clean_text(data.get("qc_owner")),
+            "is_standard": 1 if data.get("is_standard") else 0,
+            "status": clean_text(data.get("status")) or "사용",
+            "remark": clean_text(data.get("remark")),
+            "history_card_updated": clean_text(data.get("history_card_updated")),
+            "correction_offset": data.get("correction_offset", ""),
+            "correction_factor": data.get("correction_factor", ""),
+            "correction_unit": clean_text(data.get("correction_unit")),
+            "correction_note": clean_text(data.get("correction_note")),
+            "disposal_report_no": clean_text(data.get("disposal_report_no")),
+            "disposal_report_file_path": clean_text(data.get("disposal_report_file_path")),
+            "updated_at": ts,
+        }
+        existing_management_nos = set(instruments["management_no"].fillna("")) if "management_no" in instruments else set()
+        if instruments.empty or management_no not in existing_management_nos:
+            payload["id"] = next_instrument_id
+            payload["created_at"] = ts
+            next_instrument_id += 1
+            instruments = pd.concat([instruments, pd.DataFrame([payload])], ignore_index=True)
+            return int(payload["id"])
+
+        idx = instruments.index[instruments["management_no"] == management_no][0]
+        for key, value in payload.items():
+            if key in instruments.columns:
+                instruments.at[idx, key] = value
+        existing_id = pd.to_numeric(pd.Series([instruments.at[idx, "id"]]), errors="coerce").fillna(0).iloc[0]
+        if int(existing_id) == 0:
+            instruments.at[idx, "id"] = next_instrument_id
+            next_instrument_id += 1
+        return int(instruments.at[idx, "id"])
+
+    def add_record_row(data: dict[str, Any]) -> None:
+        nonlocal records, next_record_id
+        row = {
+            "id": "",
+            "instrument_id": int(data["instrument_id"]),
+            "calibration_type": clean_text(data.get("calibration_type")),
+            "calibration_date": clean_text(data.get("calibration_date")),
+            "next_due_date": clean_text(data.get("next_due_date")),
+            "result": clean_text(data.get("result")),
+            "certificate_no": clean_text(data.get("certificate_no")),
+            "certificate_file_path": clean_text(data.get("certificate_file_path")),
+            "measured_value": data.get("measured_value") if data.get("measured_value") is not None else "",
+            "corrected_value": data.get("corrected_value") if data.get("corrected_value") is not None else "",
+            "correction_snapshot": clean_text(data.get("correction_snapshot")),
+            "note": clean_text(data.get("note")),
+            "created_at": ts,
+        }
+        if not records.empty:
+            existing = records[
+                (records["instrument_id"].astype(str) == str(row["instrument_id"]))
+                & (records["calibration_type"].fillna("") == row["calibration_type"])
+                & (records["calibration_date"].fillna("") == row["calibration_date"])
+                & (records["next_due_date"].fillna("") == row["next_due_date"])
+                & (records["note"].fillna("") == row["note"])
+            ]
+            if not existing.empty:
+                idx = existing.index[0]
+                for key in ["result", "certificate_no", "certificate_file_path", "measured_value", "corrected_value", "correction_snapshot"]:
+                    if row.get(key) not in ("", None):
+                        records.at[idx, key] = row[key]
+                return
+        row["id"] = next_record_id
+        next_record_id += 1
+        records = pd.concat([records, pd.DataFrame([row])], ignore_index=True)
+
+    wb = openpyxl.load_workbook(source, data_only=True)
+    ws = wb["검교정 이력-2026.05.15"] if "검교정 이력-2026.05.15" in wb.sheetnames else wb.worksheets[0]
+    instrument_count = 0
+    record_count = 0
+    disposed_count = 0
+
+    for row in ws.iter_rows(min_row=4, values_only=True):
+        management_no = clean_text(row[0] if len(row) > 0 else "")
+        name = clean_text(row[1] if len(row) > 1 else "")
+        if not management_no or not name:
+            continue
+        remark = clean_text(row[12] if len(row) > 12 else "")
+        disposal_text = " ".join([remark, clean_text(row[9] if len(row) > 9 else ""), clean_text(row[10] if len(row) > 10 else "")])
+        status = "폐기" if "폐기" in disposal_text else "사용"
+        disposed_count += 1 if status == "폐기" else 0
+        instrument_id = upsert_instrument_row(
+            {
+                "management_no": management_no,
+                "name": name,
+                "serial_no": clean_text(row[2] if len(row) > 2 else ""),
+                "cycle_text": clean_text(row[3] if len(row) > 3 else ""),
+                "location": clean_text(row[4] if len(row) > 4 else ""),
+                "process": clean_text(row[5] if len(row) > 5 else ""),
+                "department": clean_text(row[6] if len(row) > 6 else "") or derive_department(row[4] if len(row) > 4 else ""),
+                "department_owner": clean_text(row[7] if len(row) > 7 else ""),
+                "department_owner2": clean_text(row[8] if len(row) > 8 else ""),
+                "is_standard": "표준품" in management_no or "표준품" in remark,
+                "status": status,
+                "remark": remark,
+                "history_card_updated": clean_text(row[13] if len(row) > 13 else ""),
+            }
+        )
+        instrument_count += 1
+        for calibration_type, value in (("내부", row[9] if len(row) > 9 else None), ("외부", row[10] if len(row) > 10 else None)):
+            text = clean_text(value)
+            if not text or text.upper() == "N/A" or "폐기" in text:
+                continue
+            parsed = parse_dates(text)
+            add_record_row(
+                {
+                    "instrument_id": instrument_id,
+                    "calibration_type": calibration_type,
+                    "calibration_date": parsed[0].isoformat() if parsed else "",
+                    "next_due_date": parsed[-1].isoformat() if len(parsed) > 1 else "",
+                    "result": "기존 대장",
+                    "note": text,
+                }
+            )
+            record_count += 1
+
+    if len(wb.worksheets) > 1:
+        ws2 = wb.worksheets[1]
+        for row in ws2.iter_rows(min_row=3, values_only=True):
+            if not any(row):
+                continue
+            sterilizer_no = clean_text(row[0] if len(row) > 0 else "")
+            name = clean_text(row[1] if len(row) > 1 else "")
+            serial_no = clean_text(row[2] if len(row) > 2 else "")
+            sensor_no = clean_text(row[3] if len(row) > 3 else "")
+            if not name or not serial_no:
+                continue
+            instrument_id = upsert_instrument_row(
+                {
+                    "management_no": f"멸균-{sterilizer_no}-{serial_no}".replace(" ", ""),
+                    "name": name,
+                    "serial_no": serial_no,
+                    "cycle_text": "12개월",
+                    "location": sterilizer_no,
+                    "process": "멸균기 부착",
+                    "department": "멸균",
+                    "status": "사용",
+                    "remark": f"멸균기 센서 No: {sensor_no}" if sensor_no else "",
+                }
+            )
+            instrument_count += 1
+            cal_dates = parse_dates(row[4] if len(row) > 4 else "")
+            due_dates = parse_dates(row[5] if len(row) > 5 else "")
+            add_record_row(
+                {
+                    "instrument_id": instrument_id,
+                    "calibration_type": "외부",
+                    "calibration_date": cal_dates[0].isoformat() if cal_dates else "",
+                    "next_due_date": due_dates[0].isoformat() if due_dates else "",
+                    "result": "기존 대장",
+                    "note": "멸균기 부착 계측기",
+                }
+            )
+            record_count += 1
+
+    write_table("instruments", instruments, INSTRUMENT_COLUMNS)
+    write_table("calibration_records", records, RECORD_COLUMNS)
+
+    log = pd.DataFrame(columns=IMPORT_LOG_COLUMNS) if reset else table_df("import_log")
+    log_row = {
+        "id": max_id(log) + 1,
+        "source_path": str(source),
+        "imported_at": ts,
+        "instrument_count": instrument_count,
+        "record_count": record_count,
+    }
+    write_table("import_log", pd.concat([log, pd.DataFrame([log_row])], ignore_index=True), IMPORT_LOG_COLUMNS)
+    return ImportSummary(instrument_count, record_count, disposed_count, str(source))
