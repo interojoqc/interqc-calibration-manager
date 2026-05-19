@@ -352,7 +352,7 @@ def add_calibration_record(data: dict[str, Any]) -> None:
     init_db()
     df = records_raw_df()
     row = {
-        "id": next_id("calibration_records"),
+        "id": "",
         "instrument_id": int(data["instrument_id"]),
         "calibration_type": clean_text(data.get("calibration_type")),
         "calibration_date": clean_text(data.get("calibration_date")),
@@ -366,6 +366,22 @@ def add_calibration_record(data: dict[str, Any]) -> None:
         "note": clean_text(data.get("note")),
         "created_at": now_text(),
     }
+    if not df.empty:
+        existing = df[
+            (df["instrument_id"] == row["instrument_id"])
+            & (df["calibration_type"].fillna("") == row["calibration_type"])
+            & (df["calibration_date"].fillna("") == row["calibration_date"])
+            & (df["next_due_date"].fillna("") == row["next_due_date"])
+            & (df["note"].fillna("") == row["note"])
+        ]
+        if not existing.empty:
+            idx = existing.index[0]
+            for key in ["result", "certificate_no", "certificate_file_path", "measured_value", "corrected_value", "correction_snapshot"]:
+                if row.get(key) not in ("", None):
+                    df.at[idx, key] = row[key]
+            write_table("calibration_records", df, RECORD_COLUMNS)
+            return
+    row["id"] = next_id("calibration_records")
     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
     write_table("calibration_records", df, RECORD_COLUMNS)
 
