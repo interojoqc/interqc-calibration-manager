@@ -15,6 +15,7 @@ from cloud_integrations import (
     extract_text_with_vision,
     parse_certificate_candidates,
     replace_sheet_with_dataframe,
+    upload_file_via_apps_script,
     upload_file_to_drive,
 )
 from backend import (
@@ -131,6 +132,12 @@ def save_certificate_file(uploaded_file, management_no: str, category: str, docu
     if uploaded_file is None:
         return ""
     status = cloud_status()
+    script_file_name = build_document_filename(uploaded_file, management_no, document_date, category)
+    if os.getenv("GOOGLE_APPS_SCRIPT_UPLOAD_URL") or st.secrets.get("GOOGLE_APPS_SCRIPT_UPLOAD_URL", ""):
+        try:
+            return upload_file_via_apps_script(script_file_name, uploaded_file.getvalue(), uploaded_file.type or "application/octet-stream")
+        except Exception as exc:
+            st.warning(f"Apps Script Drive 업로드 실패로 다른 저장 방식을 시도합니다: {exc}")
     if status.google_libs and status.credentials and status.drive_folder_id:
         try:
             file_name = next_document_filename(uploaded_file, management_no, document_date, category, use_drive=True)
