@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Any
+from urllib import request
 
 import pandas as pd
 
@@ -121,6 +123,31 @@ def upload_file_to_drive(file_name: str, content: bytes, mime_type: str = "appli
         .execute()
     )
     return created.get("webViewLink") or f"https://drive.google.com/file/d/{created['id']}/view"
+
+
+def upload_file_via_apps_script(file_name: str, content: bytes, mime_type: str = "application/octet-stream") -> str:
+    script_url = get_secret("GOOGLE_APPS_SCRIPT_UPLOAD_URL")
+    if not script_url:
+        raise RuntimeError("GOOGLE_APPS_SCRIPT_UPLOAD_URL is not configured.")
+    payload = {
+        "token": get_secret("GOOGLE_APPS_SCRIPT_UPLOAD_TOKEN"),
+        "folderId": get_secret("GOOGLE_DRIVE_FOLDER_ID"),
+        "fileName": file_name,
+        "mimeType": mime_type,
+        "contentBase64": base64.b64encode(content).decode("ascii"),
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = request.Request(
+        script_url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with request.urlopen(req, timeout=60) as response:
+        result = json.loads(response.read().decode("utf-8"))
+    if not result.get("ok"):
+        raise RuntimeError(result.get("error") or "Apps Script upload failed.")
+    return result.get("webViewLink") or result.get("url") or ""
 
 
 def drive_file_exists(file_name: str) -> bool:
