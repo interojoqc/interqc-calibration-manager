@@ -806,6 +806,7 @@ elif page == "데이터 가져오기":
         uploaded = st.file_uploader("엑셀 파일 업로드", type=["xlsx"])
         if uploaded and st.button("업로드 파일 가져오기", type="primary"):
             temp_path = Path(__file__).parent / "data" / uploaded.name
+            temp_path.parent.mkdir(parents=True, exist_ok=True)
             temp_path.write_bytes(uploaded.getbuffer())
             with st.spinner("엑셀 데이터를 가져오는 중입니다. 완료 메시지가 뜰 때까지 다시 누르지 마세요."):
                 summary = import_excel(temp_path, reset=reset)
