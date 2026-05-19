@@ -39,8 +39,10 @@ CREATE TABLE IF NOT EXISTS instruments (
     cycle_text TEXT,
     cycle_months INTEGER,
     location TEXT,
+    process TEXT,
     department TEXT,
     department_owner TEXT,
+    department_owner2 TEXT,
     qc_owner TEXT,
     is_standard INTEGER DEFAULT 0,
     status TEXT DEFAULT '사용',
@@ -117,6 +119,8 @@ def init_db() -> None:
             conn,
             "instruments",
             {
+                "process": "TEXT",
+                "department_owner2": "TEXT",
                 "disposal_report_no": "TEXT",
                 "disposal_report_file_path": "TEXT",
             },
@@ -277,8 +281,10 @@ def upsert_instrument(data: dict[str, Any]) -> int:
         "cycle_text": cycle_text,
         "cycle_months": data.get("cycle_months") or parse_cycle_months(cycle_text),
         "location": clean_text(data.get("location")),
+        "process": clean_text(data.get("process")),
         "department": clean_text(data.get("department")) or derive_department(data.get("location", "")),
         "department_owner": clean_text(data.get("department_owner")),
+        "department_owner2": clean_text(data.get("department_owner2")),
         "qc_owner": clean_text(data.get("qc_owner")),
         "is_standard": 1 if data.get("is_standard") else 0,
         "status": clean_text(data.get("status")) or "사용",
@@ -298,7 +304,8 @@ def upsert_instrument(data: dict[str, Any]) -> int:
                 """
                 UPDATE instruments SET
                     name=:name, serial_no=:serial_no, cycle_text=:cycle_text, cycle_months=:cycle_months,
-                    location=:location, department=:department, department_owner=:department_owner,
+                    location=:location, process=:process, department=:department,
+                    department_owner=:department_owner, department_owner2=:department_owner2,
                     qc_owner=:qc_owner, is_standard=:is_standard, status=:status, remark=:remark,
                     history_card_updated=:history_card_updated, correction_offset=:correction_offset,
                     correction_factor=:correction_factor, correction_unit=:correction_unit,
@@ -311,12 +318,12 @@ def upsert_instrument(data: dict[str, Any]) -> int:
         conn.execute(
             """
             INSERT INTO instruments (
-                management_no, name, serial_no, cycle_text, cycle_months, location, department,
-                department_owner, qc_owner, is_standard, status, remark, history_card_updated,
+                management_no, name, serial_no, cycle_text, cycle_months, location, process, department,
+                department_owner, department_owner2, qc_owner, is_standard, status, remark, history_card_updated,
                 correction_offset, correction_factor, correction_unit, correction_note, created_at, updated_at
             ) VALUES (
-                :management_no, :name, :serial_no, :cycle_text, :cycle_months, :location, :department,
-                :department_owner, :qc_owner, :is_standard, :status, :remark, :history_card_updated,
+                :management_no, :name, :serial_no, :cycle_text, :cycle_months, :location, :process, :department,
+                :department_owner, :department_owner2, :qc_owner, :is_standard, :status, :remark, :history_card_updated,
                 :correction_offset, :correction_factor, :correction_unit, :correction_note, :created_at, :updated_at
             )
             """,
@@ -347,6 +354,36 @@ def add_calibration_record(data: dict[str, Any]) -> None:
                 clean_text(data.get("correction_snapshot")),
                 clean_text(data.get("note")),
                 now_text(),
+            ),
+        )
+
+
+def update_instrument_master(instrument_id: int, data: dict[str, Any]) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE instruments
+            SET name = ?, serial_no = ?, cycle_text = ?, cycle_months = ?, location = ?, process = ?,
+                department = ?, department_owner = ?, department_owner2 = ?, qc_owner = ?,
+                is_standard = ?, status = ?, remark = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                clean_text(data.get("name")),
+                clean_text(data.get("serial_no")),
+                clean_text(data.get("cycle_text")),
+                data.get("cycle_months") or parse_cycle_months(clean_text(data.get("cycle_text"))) or None,
+                clean_text(data.get("location")),
+                clean_text(data.get("process")),
+                clean_text(data.get("department")),
+                clean_text(data.get("department_owner")),
+                clean_text(data.get("department_owner2")),
+                clean_text(data.get("qc_owner")),
+                1 if data.get("is_standard") else 0,
+                clean_text(data.get("status")) or "사용",
+                clean_text(data.get("remark")),
+                now_text(),
+                instrument_id,
             ),
         )
 
@@ -419,8 +456,9 @@ def import_excel(path: str | Path, reset: bool = False) -> ImportSummary:
         name = clean_text(row[1] if len(row) > 1 else "")
         if not management_no or not name:
             continue
-        remark = clean_text(row[8] if len(row) > 8 else "")
-        status = "폐기" if "폐기" in remark else "사용"
+        remark = clean_text(row[12] if len(row) > 12 else "")
+        disposal_text = " ".join([remark, clean_text(row[9] if len(row) > 9 else ""), clean_text(row[10] if len(row) > 10 else "")])
+        status = "폐기" if "폐기" in disposal_text else "사용"
         disposed_count += 1 if status == "폐기" else 0
         instrument_id = upsert_instrument(
             {
@@ -429,17 +467,20 @@ def import_excel(path: str | Path, reset: bool = False) -> ImportSummary:
                 "serial_no": clean_text(row[2] if len(row) > 2 else ""),
                 "cycle_text": clean_text(row[3] if len(row) > 3 else ""),
                 "location": clean_text(row[4] if len(row) > 4 else ""),
-                "department": derive_department(row[4] if len(row) > 4 else ""),
+                "process": clean_text(row[5] if len(row) > 5 else ""),
+                "department": clean_text(row[6] if len(row) > 6 else "") or derive_department(row[4] if len(row) > 4 else ""),
+                "department_owner": clean_text(row[7] if len(row) > 7 else ""),
+                "department_owner2": clean_text(row[8] if len(row) > 8 else ""),
                 "is_standard": "표준품" in management_no or "표준품" in remark,
                 "status": status,
                 "remark": remark,
-                "history_card_updated": clean_text(row[9] if len(row) > 9 else ""),
+                "history_card_updated": clean_text(row[13] if len(row) > 13 else ""),
             }
         )
         instrument_count += 1
-        for calibration_type, value in (("내부", row[5] if len(row) > 5 else None), ("외부", row[6] if len(row) > 6 else None)):
+        for calibration_type, value in (("내부", row[9] if len(row) > 9 else None), ("외부", row[10] if len(row) > 10 else None)):
             text = clean_text(value)
-            if not text or text.upper() == "N/A":
+            if not text or text.upper() == "N/A" or "폐기" in text:
                 continue
             parsed = parse_dates(text)
             add_calibration_record(
@@ -472,6 +513,7 @@ def import_excel(path: str | Path, reset: bool = False) -> ImportSummary:
                     "serial_no": serial_no,
                     "cycle_text": "12개월",
                     "location": sterilizer_no,
+                    "process": "멸균기 부착",
                     "department": "멸균",
                     "status": "사용",
                     "remark": f"멸균기 센서 No: {sensor_no}" if sensor_no else "",
