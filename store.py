@@ -636,13 +636,19 @@ def make_kakao_message(department: str, rows: pd.DataFrame, owner: str = "") -> 
         f"기준일: {today}",
         "",
     ]
-    for _, row in rows.head(30).iterrows():
+    for _, row in rows.iterrows():
         due = row.get("next_due_date") or "일자 미입력"
         days = row.get("남은일수")
         days_text = f"D{int(days):+d}" if pd.notna(days) else "D-?"
-        lines.append(f"- [{row.get('department','')}] {row['management_no']} / {row['name']} / {due} ({days_text}) / 위치: {row.get('location','')}")
-    if len(rows) > 30:
-        lines.append(f"- 외 {len(rows) - 30}건")
+        process = f" / 공정: {row.get('process')}" if row.get("process") else ""
+        owner1 = row.get("department_owner") or ""
+        owner2 = row.get("department_owner2") or ""
+        owners = ", ".join([x for x in [owner1, owner2] if x and x != "N/A"])
+        owner_text = f" / 담당: {owners}" if owners else ""
+        lines.append(
+            f"- [{row.get('department','')}] {row['management_no']} / {row['name']} / {due} ({days_text})"
+            f" / 위치: {row.get('location','')}{process}{owner_text}"
+        )
     lines += ["", "교정 예정일 전 QC로 반납 부탁드립니다.", "이미 반납 또는 교정 진행 중이면 회신 부탁드립니다."]
     return "\n".join(lines)
 
