@@ -369,17 +369,18 @@ def add_calibration_record(data: dict[str, Any]) -> None:
     }
     if not df.empty:
         existing = df[
-            (df["instrument_id"] == row["instrument_id"])
+            (df["instrument_id"].astype(str) == str(row["instrument_id"]))
             & (df["calibration_type"].fillna("") == row["calibration_type"])
             & (df["calibration_date"].fillna("") == row["calibration_date"])
             & (df["next_due_date"].fillna("") == row["next_due_date"])
-            & (df["note"].fillna("") == row["note"])
         ]
         if not existing.empty:
             idx = existing.index[0]
             for key in ["result", "certificate_no", "certificate_file_path", "measured_value", "corrected_value", "correction_snapshot"]:
                 if row.get(key) not in ("", None):
                     df.at[idx, key] = row[key]
+            if not clean_text(df.at[idx, "note"]) and row.get("note"):
+                df.at[idx, "note"] = row["note"]
             write_table("calibration_records", df, RECORD_COLUMNS)
             return
     row["id"] = next_id("calibration_records")
@@ -708,13 +709,14 @@ def import_excel(path: str | Path, reset: bool = False) -> ImportSummary:
                 & (records["calibration_type"].fillna("") == row["calibration_type"])
                 & (records["calibration_date"].fillna("") == row["calibration_date"])
                 & (records["next_due_date"].fillna("") == row["next_due_date"])
-                & (records["note"].fillna("") == row["note"])
             ]
             if not existing.empty:
                 idx = existing.index[0]
                 for key in ["result", "certificate_no", "certificate_file_path", "measured_value", "corrected_value", "correction_snapshot"]:
                     if row.get(key) not in ("", None):
                         records.at[idx, key] = row[key]
+                if not clean_text(records.at[idx, "note"]) and row.get("note"):
+                    records.at[idx, "note"] = row["note"]
                 return
         row["id"] = next_record_id
         next_record_id += 1
