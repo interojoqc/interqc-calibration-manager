@@ -334,6 +334,57 @@ def upsert_instrument(data: dict[str, Any]) -> int:
 
 def add_calibration_record(data: dict[str, Any]) -> None:
     with connect() as conn:
+        payload = {
+            "instrument_id": data["instrument_id"],
+            "calibration_type": clean_text(data.get("calibration_type")),
+            "calibration_date": clean_text(data.get("calibration_date")),
+            "next_due_date": clean_text(data.get("next_due_date")),
+            "result": clean_text(data.get("result")),
+            "certificate_no": clean_text(data.get("certificate_no")),
+            "certificate_file_path": clean_text(data.get("certificate_file_path")),
+            "measured_value": data.get("measured_value"),
+            "corrected_value": data.get("corrected_value"),
+            "correction_snapshot": clean_text(data.get("correction_snapshot")),
+            "note": clean_text(data.get("note")),
+        }
+        existing = conn.execute(
+            """
+            SELECT id, certificate_no, certificate_file_path, measured_value, corrected_value, correction_snapshot
+            FROM calibration_records
+            WHERE instrument_id = ? AND calibration_type = ? AND calibration_date = ?
+              AND next_due_date = ? AND COALESCE(note, '') = ?
+            """,
+            (
+                payload["instrument_id"],
+                payload["calibration_type"],
+                payload["calibration_date"],
+                payload["next_due_date"],
+                payload["note"],
+            ),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE calibration_records
+                SET result = COALESCE(NULLIF(?, ''), result),
+                    certificate_no = COALESCE(NULLIF(?, ''), certificate_no),
+                    certificate_file_path = COALESCE(NULLIF(?, ''), certificate_file_path),
+                    measured_value = COALESCE(?, measured_value),
+                    corrected_value = COALESCE(?, corrected_value),
+                    correction_snapshot = COALESCE(NULLIF(?, ''), correction_snapshot)
+                WHERE id = ?
+                """,
+                (
+                    payload["result"],
+                    payload["certificate_no"],
+                    payload["certificate_file_path"],
+                    payload["measured_value"],
+                    payload["corrected_value"],
+                    payload["correction_snapshot"],
+                    existing["id"],
+                ),
+            )
+            return
         conn.execute(
             """
             INSERT INTO calibration_records (
@@ -342,17 +393,17 @@ def add_calibration_record(data: dict[str, Any]) -> None:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                data["instrument_id"],
-                clean_text(data.get("calibration_type")),
-                clean_text(data.get("calibration_date")),
-                clean_text(data.get("next_due_date")),
-                clean_text(data.get("result")),
-                clean_text(data.get("certificate_no")),
-                clean_text(data.get("certificate_file_path")),
-                data.get("measured_value"),
-                data.get("corrected_value"),
-                clean_text(data.get("correction_snapshot")),
-                clean_text(data.get("note")),
+                payload["instrument_id"],
+                payload["calibration_type"],
+                payload["calibration_date"],
+                payload["next_due_date"],
+                payload["result"],
+                payload["certificate_no"],
+                payload["certificate_file_path"],
+                payload["measured_value"],
+                payload["corrected_value"],
+                payload["correction_snapshot"],
+                payload["note"],
                 now_text(),
             ),
         )
