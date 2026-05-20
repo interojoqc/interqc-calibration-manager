@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -80,6 +81,8 @@ SHEETS = {
     "import_log": IMPORT_LOG_COLUMNS,
 }
 
+_SHEET_CACHE: dict[str, list[list[str]]] = {}
+
 
 def spreadsheet_id() -> str:
     value = get_secret("GOOGLE_SHEET_ID")
@@ -90,6 +93,22 @@ def spreadsheet_id() -> str:
 
 def service():
     return sheets_service()
+
+
+def execute_with_retry(request_obj, attempts: int = 4):
+    last_error = None
+    for attempt in range(attempts):
+        try:
+            return request_obj.execute()
+        except Exception as exc:
+            status = getattr(getattr(exc, "resp", None), "status", None)
+            if status not in (429, 500, 502, 503, 504) or attempt == attempts - 1:
+                raise
+            last_error = exc
+            time.sleep(0.8 * (attempt + 1))
+    if last_error:
+        raise last_error
+    return request_obj.execute()
 
 
 def init_db() -> None:
@@ -110,20 +129,30 @@ def init_db() -> None:
 
 
 def get_values(sheet_name: str) -> list[list[str]]:
-    result = service().spreadsheets().values().get(spreadsheetId=spreadsheet_id(), range=f"{sheet_name}!A:ZZ").execute()
-    return result.get("values", [])
+    if sheet_name in _SHEET_CACHE:
+        return [row[:] for row in _SHEET_CACHE[sheet_name]]
+    result = execute_with_retry(
+        service().spreadsheets().values().get(spreadsheetId=spreadsheet_id(), range=f"{sheet_name}!A:ZZ")
+    )
+    values = result.get("values", [])
+    _SHEET_CACHE[sheet_name] = [row[:] for row in values]
+    return values
 
 
 def write_values(sheet_name: str, values: list[list[Any]]) -> None:
     svc = service()
     sid = spreadsheet_id()
-    svc.spreadsheets().values().clear(spreadsheetId=sid, range=f"{sheet_name}!A:ZZ").execute()
-    svc.spreadsheets().values().update(
-        spreadsheetId=sid,
-        range=f"{sheet_name}!A1",
-        valueInputOption="RAW",
-        body={"values": values},
-    ).execute()
+    _SHEET_CACHE.pop(sheet_name, None)
+    execute_with_retry(svc.spreadsheets().values().clear(spreadsheetId=sid, range=f"{sheet_name}!A:ZZ"))
+    execute_with_retry(
+        svc.spreadsheets().values().update(
+            spreadsheetId=sid,
+            range=f"{sheet_name}!A1",
+            valueInputOption="RAW",
+            body={"values": values},
+        )
+    )
+    _SHEET_CACHE[sheet_name] = [[str(cell) for cell in row] for row in values]
 
 
 def rows_to_dicts(sheet_name: str) -> list[dict[str, Any]]:
@@ -331,7 +360,8 @@ def instruments_df(include_disposed: bool = True) -> pd.DataFrame:
 
 def calibration_history_df(instrument_id: int | None = None) -> pd.DataFrame:
     records = records_raw_df()
-    instruments = instruments_raw_df()[["id", "management_no", "name"]] if not instruments_raw_df().empty else pd.DataFrame(columns=["id", "management_no", "name"])
+    instrument_source = instruments_raw_df()
+    instruments = instrument_source[["id", "management_no", "name"]] if not instrument_source.empty else pd.DataFrame(columns=["id", "management_no", "name"])
     if records.empty:
         return pd.DataFrame(columns=["id", "instrument_id", "management_no", "name"] + RECORD_COLUMNS[2:])
     if instrument_id:
