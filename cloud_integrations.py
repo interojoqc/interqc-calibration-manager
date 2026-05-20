@@ -147,7 +147,7 @@ def upload_file_via_apps_script(file_name: str, content: bytes, mime_type: str =
         result = json.loads(response.read().decode("utf-8"))
     if not result.get("ok"):
         raise RuntimeError(result.get("error") or "Apps Script upload failed.")
-    return result.get("webViewLink") or result.get("url") or ""
+    return result.get("downloadUrl") or result.get("webContentLink") or result.get("webViewLink") or result.get("url") or ""
 
 
 def drive_file_exists(file_name: str) -> bool:
