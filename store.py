@@ -520,6 +520,45 @@ def add_calibration_record(data: dict[str, Any]) -> None:
         )
 
 
+def update_calibration_record(record_id: int, data: dict[str, Any]) -> None:
+    payload = {
+        "id": int(record_id),
+        "calibration_type": clean_text(data.get("calibration_type")),
+        "calibration_date": clean_text(data.get("calibration_date")),
+        "next_due_date": clean_text(data.get("next_due_date")),
+        "result": clean_text(data.get("result")),
+        "certificate_no": clean_text(data.get("certificate_no")),
+        "certificate_file_path": clean_text(data.get("certificate_file_path")),
+        "measured_value": data.get("measured_value") if data.get("measured_value") is not None else None,
+        "corrected_value": data.get("corrected_value") if data.get("corrected_value") is not None else None,
+        "correction_snapshot": clean_text(data.get("correction_snapshot")),
+        "note": clean_text(data.get("note")),
+    }
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE calibration_records
+            SET calibration_type = :calibration_type,
+                calibration_date = :calibration_date,
+                next_due_date = :next_due_date,
+                result = :result,
+                certificate_no = :certificate_no,
+                certificate_file_path = :certificate_file_path,
+                measured_value = :measured_value,
+                corrected_value = :corrected_value,
+                correction_snapshot = :correction_snapshot,
+                note = :note
+            WHERE id = :id
+            """,
+            payload,
+        )
+
+
+def delete_calibration_record(record_id: int) -> None:
+    with connect() as conn:
+        conn.execute("DELETE FROM calibration_records WHERE id = ?", (int(record_id),))
+
+
 def update_instrument_master(instrument_id: int, data: dict[str, Any]) -> None:
     with connect() as conn:
         conn.execute(
