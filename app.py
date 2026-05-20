@@ -29,6 +29,7 @@ from backend import (
     contacts_df,
     dashboard_metrics,
     dataframe_to_xlsx_bytes,
+    delete_calibration_record,
     due_items,
     export_internal_certificate,
     get_import_log,
@@ -42,6 +43,7 @@ from backend import (
     parse_cycle_months,
     save_uploaded_file,
     update_correction,
+    update_calibration_record,
     update_instrument_master,
     upsert_contact,
     upsert_instrument,
@@ -65,6 +67,18 @@ def require_qc() -> bool:
 
 def date_str(value: date | None) -> str:
     return value.isoformat() if value else ""
+
+
+def parse_date_value(value: str | None) -> date:
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return date.today()
+    return parsed.date()
+
+
+def number_value(value) -> float:
+    parsed = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    return 0.0 if pd.isna(parsed) else float(parsed)
 
 
 def file_download_button(label: str, path_value: str | None, key: str) -> None:
@@ -668,6 +682,71 @@ elif page == "검교정/보정 입력":
                 )
         if not history.empty and not has_file:
             st.caption("등록된 성적서 파일이 있는 이력이 없어서 다운로드 버튼은 표시되지 않습니다.")
+        if is_qc() and not history.empty:
+            with st.expander("QC 전용 이력 수정/삭제"):
+                options = {
+                    f"{row.id} | {row.calibration_type} | {row.calibration_date} -> {row.next_due_date} | {row.certificate_no or '성적서번호 없음'}": int(row.id)
+                    for row in history.itertuples()
+                }
+                selected_record = st.selectbox("수정할 이력", list(options.keys()), key="edit_record_select")
+                record_row = history[history["id"] == options[selected_record]].iloc[0].to_dict()
+                replacement_file = st.file_uploader(
+                    "성적서 파일 교체 업로드",
+                    type=["pdf", "png", "jpg", "jpeg", "xlsx"],
+                    key=f"replace_cert_{record_row['id']}",
+                )
+                st.caption("새 파일을 올리면 기존 이력의 파일 링크만 새 파일로 교체됩니다. 기존 Drive 파일은 자동 삭제하지 않습니다.")
+                with st.form(f"edit_record_form_{record_row['id']}"):
+                    c1, c2, c3 = st.columns(3)
+                    edit_type = c1.selectbox(
+                        "검교정 구분",
+                        ["내부", "외부"],
+                        index=0 if record_row.get("calibration_type") == "내부" else 1,
+                    )
+                    edit_cal_date = c2.date_input("교정일자", value=parse_date_value(record_row.get("calibration_date")))
+                    edit_due_date = c3.date_input("차기 교정일", value=parse_date_value(record_row.get("next_due_date")))
+                    c4, c5 = st.columns(2)
+                    result_options = ["적합", "부적합", "수리", "기존 대장", "기타"]
+                    current_result = record_row.get("result") if record_row.get("result") in result_options else "적합"
+                    edit_result = c4.selectbox("판정", result_options, index=result_options.index(current_result))
+                    edit_cert_no = c5.text_input("성적서 번호", value=str(record_row.get("certificate_no") or ""))
+                    edit_measured = st.number_input("측정값", value=number_value(record_row.get("measured_value")), format="%.6f")
+                    edit_corrected = st.number_input("보정 적용값", value=number_value(record_row.get("corrected_value")), format="%.6f")
+                    edit_note = st.text_area("입력 내용/비고", value=str(record_row.get("note") or ""))
+                    clear_file = st.checkbox("성적서 파일 링크 제거", value=False)
+                    submitted_edit = st.form_submit_button("이력 수정 저장")
+                if submitted_edit and require_qc():
+                    current_path = "" if clear_file else str(record_row.get("certificate_file_path") or "")
+                    if replacement_file:
+                        current_path = save_certificate_file(
+                            replacement_file,
+                            instrument["management_no"],
+                            "certificates",
+                            edit_cal_date,
+                        )
+                    update_calibration_record(
+                        int(record_row["id"]),
+                        {
+                            "calibration_type": edit_type,
+                            "calibration_date": date_str(edit_cal_date),
+                            "next_due_date": date_str(edit_due_date),
+                            "result": edit_result,
+                            "certificate_no": edit_cert_no,
+                            "certificate_file_path": current_path,
+                            "measured_value": edit_measured,
+                            "corrected_value": edit_corrected,
+                            "correction_snapshot": str(record_row.get("correction_snapshot") or ""),
+                            "note": edit_note,
+                        },
+                    )
+                    st.success("검교정 이력을 수정했습니다.")
+                    st.rerun()
+                confirm_delete = st.checkbox("선택한 이력을 삭제하겠습니다", key=f"delete_confirm_{record_row['id']}")
+                if st.button("선택 이력 삭제", disabled=not confirm_delete, key=f"delete_record_{record_row['id']}"):
+                    if require_qc():
+                        delete_calibration_record(int(record_row["id"]))
+                        st.success("선택한 검교정 이력을 삭제했습니다. Drive에 올라간 파일은 삭제하지 않았습니다.")
+                        st.rerun()
 
 elif page == "알림 문구":
     st.subheader("카카오톡 알림 문구")
