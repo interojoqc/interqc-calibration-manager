@@ -487,6 +487,38 @@ def add_calibration_record(data: dict[str, Any]) -> None:
     write_table("calibration_records", df, RECORD_COLUMNS)
 
 
+def update_calibration_record(record_id: int, data: dict[str, Any]) -> None:
+    df = records_raw_df().astype("object")
+    idxs = df.index[df["id"].astype(str) == str(record_id)]
+    if idxs.empty:
+        return
+    idx = idxs[0]
+    updates = {
+        "calibration_type": clean_text(data.get("calibration_type")),
+        "calibration_date": clean_text(data.get("calibration_date")),
+        "next_due_date": clean_text(data.get("next_due_date")),
+        "result": clean_text(data.get("result")),
+        "certificate_no": clean_text(data.get("certificate_no")),
+        "certificate_file_path": clean_text(data.get("certificate_file_path")),
+        "measured_value": data.get("measured_value") if data.get("measured_value") is not None else "",
+        "corrected_value": data.get("corrected_value") if data.get("corrected_value") is not None else "",
+        "correction_snapshot": clean_text(data.get("correction_snapshot")),
+        "note": clean_text(data.get("note")),
+    }
+    for key, value in updates.items():
+        if key in df.columns:
+            df.at[idx, key] = value
+    write_table("calibration_records", df, RECORD_COLUMNS)
+
+
+def delete_calibration_record(record_id: int) -> None:
+    df = records_raw_df()
+    if df.empty:
+        return
+    df = df[df["id"].astype(str) != str(record_id)]
+    write_table("calibration_records", df, RECORD_COLUMNS)
+
+
 def update_instrument_master(instrument_id: int, data: dict[str, Any]) -> None:
     df = instruments_raw_df()
     idxs = df.index[df["id"] == int(instrument_id)]
