@@ -71,7 +71,7 @@ def file_download_button(label: str, path_value: str | None, key: str) -> None:
         st.caption("등록 파일 없음")
         return
     if path_value.startswith("http://") or path_value.startswith("https://"):
-        st.link_button(label, path_value)
+        st.link_button(label, drive_download_url(path_value))
         return
     path = Path(path_value)
     if not path.exists():
@@ -79,6 +79,20 @@ def file_download_button(label: str, path_value: str | None, key: str) -> None:
         return
     with open(path, "rb") as file:
         st.download_button(label, file, file_name=path.name, key=key)
+
+
+def drive_download_url(url: str) -> str:
+    file_id = ""
+    match = re.search(r"/file/d/([^/]+)", url)
+    if match:
+        file_id = match.group(1)
+    if not file_id:
+        match = re.search(r"[?&]id=([^&]+)", url)
+        if match:
+            file_id = match.group(1)
+    if file_id:
+        return f"https://drive.google.com/uc?export=download&id={file_id}"
+    return url
 
 
 def selected_instrument(df: pd.DataFrame, label: str = "계측기 선택") -> dict | None:
