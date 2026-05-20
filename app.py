@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from io import BytesIO
 from datetime import date
 from pathlib import Path
 
@@ -79,6 +80,26 @@ def parse_date_value(value: str | None) -> date:
 def number_value(value) -> float:
     parsed = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
     return 0.0 if pd.isna(parsed) else float(parsed)
+
+
+def backup_workbook_bytes() -> bytes:
+    sheets = {
+        "계측기대장": instruments_df(include_disposed=True),
+        "검교정이력": calibration_history_df(),
+        "담당자": contacts_df(),
+        "가져오기로그": get_import_log(),
+    }
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        for sheet_name, df in sheets.items():
+            clean_df = df.copy() if df is not None else pd.DataFrame()
+            clean_df.to_excel(writer, index=False, sheet_name=sheet_name)
+            ws = writer.book[sheet_name]
+            ws.freeze_panes = "A2"
+            for col in ws.columns:
+                max_len = max(len(str(cell.value or "")) for cell in col)
+                ws.column_dimensions[col[0].column_letter].width = min(max(max_len + 2, 10), 50)
+    return output.getvalue()
 
 
 def file_download_button(label: str, path_value: str | None, key: str) -> None:
@@ -930,6 +951,14 @@ GOOGLE_SERVICE_ACCOUNT_JSON={...서비스 계정 JSON 전체...}""",
     st.caption("서비스 계정 이메일을 Google Drive 폴더와 Google Sheet에 편집자로 공유해야 앱이 파일/데이터를 저장할 수 있습니다.")
 
     if require_qc():
+        st.markdown("**운영 백업**")
+        st.caption("현재 Google Sheets 데이터를 하나의 엑셀 파일로 내려받습니다. 월 1회 또는 큰 수정 전후로 저장해두는 것을 권장합니다.")
+        st.download_button(
+            "전체 운영 데이터 백업 다운로드",
+            backup_workbook_bytes(),
+            f"계측기관리_운영백업_{date.today().strftime('%Y%m%d')}.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
         st.markdown("**현재 로컬 DB를 Google Sheets로 내보내기**")
         if st.button("계측기/이력/담당자 시트를 Google Sheets로 동기화"):
             if not (status.google_libs and status.credentials and status.spreadsheet_id):
