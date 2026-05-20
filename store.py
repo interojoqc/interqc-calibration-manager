@@ -249,6 +249,116 @@ def calibration_history_df(instrument_id: int | None = None) -> pd.DataFrame:
         return pd.read_sql_query(query, conn, params=params)
 
 
+def merge_duplicate_record_rows(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
+    if df.empty:
+        return df, {"groups": 0, "removed": 0, "remaining": 0}
+
+    work = df.copy().astype("object")
+    columns = [
+        "id",
+        "instrument_id",
+        "calibration_type",
+        "calibration_date",
+        "next_due_date",
+        "result",
+        "certificate_no",
+        "certificate_file_path",
+        "measured_value",
+        "corrected_value",
+        "correction_snapshot",
+        "note",
+        "created_at",
+    ]
+    for col in columns:
+        if col not in work:
+            work[col] = ""
+
+    key_cols = ["instrument_id", "calibration_type", "calibration_date", "next_due_date"]
+    for col in key_cols:
+        work[col] = work[col].fillna("").astype(str)
+
+    merged_rows: list[dict[str, Any]] = []
+    duplicate_groups = 0
+    removed = 0
+
+    def has_value(value: Any) -> bool:
+        if value is None:
+            return False
+        try:
+            if pd.isna(value):
+                return False
+        except Exception:
+            pass
+        return str(value).strip() not in ("", "None", "nan", "NaT")
+
+    def score(row: pd.Series) -> tuple[int, int]:
+        important = ["certificate_file_path", "certificate_no", "measured_value", "corrected_value", "correction_snapshot"]
+        filled = sum(1 for col in important if has_value(row.get(col)))
+        row_id = pd.to_numeric(pd.Series([row.get("id")]), errors="coerce").fillna(0).iloc[0]
+        return filled, int(row_id)
+
+    for _, group in work.groupby(key_cols, dropna=False, sort=False):
+        if len(group) == 1:
+            merged_rows.append(group.iloc[0].to_dict())
+            continue
+
+        duplicate_groups += 1
+        removed += len(group) - 1
+        ordered = group.copy()
+        ordered["_score"] = ordered.apply(score, axis=1)
+        ordered = ordered.sort_values("_score", ascending=False)
+        keep = ordered.iloc[0].drop(labels=["_score"]).to_dict()
+
+        for col in ["result", "certificate_no", "certificate_file_path", "measured_value", "corrected_value", "correction_snapshot", "note"]:
+            if has_value(keep.get(col)):
+                continue
+            for _, candidate in ordered.drop(columns=["_score"]).iterrows():
+                if has_value(candidate.get(col)):
+                    keep[col] = candidate.get(col)
+                    break
+
+        created_values = [value for value in ordered["created_at"].tolist() if has_value(value)]
+        if created_values:
+            keep["created_at"] = sorted(map(str, created_values))[0]
+        merged_rows.append(keep)
+
+    merged = pd.DataFrame(merged_rows, columns=columns)
+    return merged, {"groups": duplicate_groups, "removed": removed, "remaining": len(merged)}
+
+
+def cleanup_duplicate_calibration_records() -> dict[str, int]:
+    with connect() as conn:
+        df = pd.read_sql_query("SELECT * FROM calibration_records", conn)
+        merged, summary = merge_duplicate_record_rows(df)
+        conn.execute("DELETE FROM calibration_records")
+        for row in merged.fillna("").to_dict("records"):
+            conn.execute(
+                """
+                INSERT INTO calibration_records (
+                    id, instrument_id, calibration_type, calibration_date, next_due_date, result,
+                    certificate_no, certificate_file_path, measured_value, corrected_value,
+                    correction_snapshot, note, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row.get("id"),
+                    row.get("instrument_id"),
+                    row.get("calibration_type"),
+                    row.get("calibration_date"),
+                    row.get("next_due_date"),
+                    row.get("result"),
+                    row.get("certificate_no"),
+                    row.get("certificate_file_path"),
+                    row.get("measured_value") if row.get("measured_value") != "" else None,
+                    row.get("corrected_value") if row.get("corrected_value") != "" else None,
+                    row.get("correction_snapshot"),
+                    row.get("note"),
+                    row.get("created_at") or now_text(),
+                ),
+            )
+    return summary
+
+
 def contacts_df() -> pd.DataFrame:
     with connect() as conn:
         return pd.read_sql_query("SELECT * FROM department_contacts ORDER BY department", conn)
