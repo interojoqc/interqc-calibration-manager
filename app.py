@@ -17,6 +17,7 @@ from cloud_integrations import (
     replace_sheet_with_dataframe,
     upload_file_via_apps_script,
     upload_file_to_drive,
+    get_secret,
 )
 from backend import (
     BACKEND_NAME,
@@ -148,7 +149,7 @@ def save_certificate_file(uploaded_file, management_no: str, category: str, docu
         return ""
     status = cloud_status()
     script_file_name = build_document_filename(uploaded_file, management_no, document_date, category)
-    if os.getenv("GOOGLE_APPS_SCRIPT_UPLOAD_URL") or st.secrets.get("GOOGLE_APPS_SCRIPT_UPLOAD_URL", ""):
+    if get_secret("GOOGLE_APPS_SCRIPT_UPLOAD_URL"):
         try:
             return upload_file_via_apps_script(script_file_name, uploaded_file.getvalue(), uploaded_file.type or "application/octet-stream")
         except Exception as exc:
