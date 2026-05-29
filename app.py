@@ -82,6 +82,18 @@ def number_value(value) -> float:
     return 0.0 if pd.isna(parsed) else float(parsed)
 
 
+def alert_metric(container, label: str, value: int | str) -> None:
+    container.markdown(
+        f"""
+        <div style="padding: 0.25rem 0 0.75rem 0;">
+            <div style="font-size: 0.875rem; color: #d92d20; font-weight: 700;">{label}</div>
+            <div style="font-size: 2.25rem; line-height: 1.2; color: #d92d20; font-weight: 700;">{value}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def backup_workbook_bytes() -> bytes:
     sheets = {
         "계측기대장": instruments_df(include_disposed=True),
@@ -254,11 +266,11 @@ if page == "대시보드":
     c1.metric("전체 계측기", f"{metrics['total']:,}")
     c2.metric("사용 계측기", f"{metrics['active']:,}")
     c3.metric("폐기 계측기", f"{metrics['disposed']:,}")
-    c4.metric("기한 초과", f"{metrics['overdue']:,}")
+    alert_metric(c4, "기한 초과", f"{metrics['overdue']:,}")
     c5.metric("90일 내 도래", f"{metrics['due_90']:,}")
 
     s1, s2, s3, s4 = st.columns(4)
-    s1.metric("30일 내 도래", f"{len(due_30):,}")
+    alert_metric(s1, "30일 내 도래", f"{len(due_30):,}")
     s2.metric("폐기보고서 미등록", f"{len(disposal_missing):,}")
     s3.metric("성적서 파일 미등록", f"{len(cert_missing):,}")
     s4.metric("검교정 미등록", f"{int(active_df['last_record_id'].isna().sum()) if not active_df.empty else 0:,}")
